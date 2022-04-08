@@ -1,0 +1,6 @@
+sentencepiece
+spacy
+jericho
+torch
+redis
+tensorboard

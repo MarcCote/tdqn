@@ -6,7 +6,6 @@ from os.path import join as pjoin
 from memory import ReplayMemory, Transition, State
 from model import DRRN
 from util import *
-import logger
 import sentencepiece as spm
 
 
@@ -87,8 +86,7 @@ class DRRN_Agent:
             self.memory = pickle.load(open(pjoin(self.save_path, 'memory.pkl'), 'rb'))
             self.network = torch.load(pjoin(self.save_path, 'model.pt'))
         except Exception as e:
-            print("Error saving model.")
-            logging.error(traceback.format_exc())
+            print("No model found.")
 
 
     def save(self):
@@ -97,4 +95,4 @@ class DRRN_Agent:
             torch.save(self.network, pjoin(self.save_path, 'model.pt'))
         except Exception as e:
             print("Error saving model.")
-            logging.error(traceback.format_exc())
+            print(e)

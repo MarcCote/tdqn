@@ -23,10 +23,11 @@ class SeqWriter(object):
     def writeseq(self, seq):
         raise NotImplementedError
 
+
 class HumanOutputFormat(KVWriter, SeqWriter):
     def __init__(self, filename_or_file):
         if isinstance(filename_or_file, str):
-            self.file = open(filename_or_file, 'wt')
+            self.file = open(filename_or_file, 'at')
             self.own_file = True
         else:
             assert hasattr(filename_or_file, 'read'), 'expected file or str, got %s'%filename_or_file
@@ -52,8 +53,11 @@ class HumanOutputFormat(KVWriter, SeqWriter):
             valwidth = max(map(len, key2str.values()))
 
         # Write out the data
-        dashes = '-' * (keywidth + valwidth + 7)
-        lines = [dashes]
+        width = keywidth + valwidth + 7
+        title = str(os.getpid()).center(width, '-')
+        dashes = '-' * width
+
+        lines = [title]
         for (key, val) in sorted(key2str.items()):
             lines.append('| %s%s | %s%s |' % (
                 key,
@@ -62,10 +66,13 @@ class HumanOutputFormat(KVWriter, SeqWriter):
                 ' ' * (valwidth - len(val)),
             ))
         lines.append(dashes)
+
         self.file.write('\n'.join(lines) + '\n')
 
         # Flush the output to the file
         self.file.flush()
+        if self.own_file:
+            os.fsync(self.file.fileno())  # Ref: https://stackoverflow.com/questions/7127075/what-exactly-is-pythons-file-flush-doing
 
     def _truncate(self, s):
         return s[:20] + '...' if len(s) > 23 else s
@@ -78,10 +85,13 @@ class HumanOutputFormat(KVWriter, SeqWriter):
                 self.file.write(' ')
         self.file.write('\n')
         self.file.flush()
+        if self.own_file:
+            os.fsync(self.file.fileno())  # Ref: https://stackoverflow.com/questions/7127075/what-exactly-is-pythons-file-flush-doing
 
     def close(self):
         if self.own_file:
             self.file.close()
+
 
 class JSONOutputFormat(KVWriter):
     def __init__(self, filename):
@@ -97,6 +107,7 @@ class JSONOutputFormat(KVWriter):
 
     def close(self):
         self.file.close()
+
 
 class CSVOutputFormat(KVWriter):
     def __init__(self, filename):
@@ -141,33 +152,53 @@ class TensorBoardOutputFormat(KVWriter):
     def __init__(self, dir):
         os.makedirs(dir, exist_ok=True)
         self.dir = dir
-        self.step = 1
+        self.step = 1  # TODO: Really needed?
         prefix = 'events'
         path = osp.join(osp.abspath(dir), prefix)
-        import tensorflow as tf
-        from tensorflow.python import pywrap_tensorflow
-        from tensorflow.core.util import event_pb2
-        from tensorflow.python.util import compat
-        self.tf = tf
-        self.event_pb2 = event_pb2
-        self.pywrap_tensorflow = pywrap_tensorflow
-        self.writer = pywrap_tensorflow.EventsWriter(compat.as_bytes(path))
+        from torch.utils.tensorboard import SummaryWriter
+
+        self.writer = SummaryWriter(path)
+
+        # import tensorflow as tf
+        # from tensorflow.python import pywrap_tensorflow
+        # from tensorflow.python.client import _pywrap_events_writer as pywrap_tensorflow
+        # from tensorflow.core.util import event_pb2
+        # from tensorflow.python.util import compat
+        # self.tf = tf
+        # self.event_pb2 = event_pb2
+        # self.pywrap_tensorflow = pywrap_tensorflow
+        # self.writer = pywrap_tensorflow.EventsWriter(compat.as_bytes(path))
 
     def writekvs(self, kvs):
-        def summary_val(k, v):
-            kwargs = {'tag': k, 'simple_value': float(v)}
-            return self.tf.Summary.Value(**kwargs)
-        summary = self.tf.Summary(value=[summary_val(k, v) for k, v in kvs.items()])
-        event = self.event_pb2.Event(wall_time=time.time(), summary=summary)
-        event.step = self.step # is there any reason why you'd want to specify the step?
-        self.writer.WriteEvent(event)
-        self.writer.Flush()
+        import torch
+        import numpy
+
+        # def summary_val(k, v):
+        #     kwargs = {'tag': k, 'simple_value': float(v)}
+        #     return self.tf.Summary.Value(**kwargs)
+
+        # summary = self.tf.Summary(value=[summary_val(k, v) for k, v in kvs.items()])
+        # event = self.event_pb2.Event(wall_time=time.time(), summary=summary)
+        # event.step = self.step # is there any reason why you'd want to specify the step?
+        # self.writer.WriteEvent(event)
+        # self.writer.Flush()
+        for k, v in kvs.items():
+            if k == "step":
+                self.step = v  # HACK: If provided, update current step.
+                continue
+
+            if isinstance(v, (torch.Tensor, numpy.ndarray)):
+                self.writer.add_histogram(k, v, kvs.get("step", self.step))
+            else:
+                self.writer.add_scalar(k, v, kvs.get("step", self.step))
+
         self.step += 1
 
     def close(self):
         if self.writer:
             self.writer.Close()
             self.writer = None
+
 
 def make_output_format(format, ev_dir, log_suffix=''):
     os.makedirs(ev_dir, exist_ok=True)

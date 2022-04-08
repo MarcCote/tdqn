@@ -4,6 +4,7 @@ from multiprocessing import Process, Pipe
 def worker(remote, parent_remote, env):
     parent_remote.close()
     env.create()
+
     try:
         done = False
         while True:
@@ -11,6 +12,7 @@ def worker(remote, parent_remote, env):
             if cmd == 'step':
                 if done:
                     ob, info = env.reset()
+
                     reward = 0
                     done = False
                 else:
@@ -19,6 +21,12 @@ def worker(remote, parent_remote, env):
             elif cmd == 'reset':
                 ob, info = env.reset()
                 remote.send((ob, info))
+            elif cmd == 'get_state':
+                remote.send((env.env.get_state(), done))
+            elif cmd == 'set_state':
+                done = data[1]
+                env.env.set_state(data[0])
+                remote.send(True)
             elif cmd == 'close':
                 env.close()
                 break
@@ -33,6 +41,7 @@ def worker(remote, parent_remote, env):
 class VecEnv:
     def __init__(self, num_envs, env):
         self.closed = False
+        self.env = env
         self.num_envs = num_envs
         self.remotes, self.work_remotes = zip(*[Pipe() for _ in range(num_envs)])
         self.ps = [Process(target=worker, args=(work_remote, remote, env))
@@ -49,7 +58,7 @@ class VecEnv:
         for remote, action in zip(self.remotes, actions):
             remote.send(('step', action))
         results = [remote.recv() for remote in self.remotes]
-        self.waiting = False
+        # self.waiting = False
         obs, rewards, dones, infos = zip(*results)
         return np.stack(obs), np.stack(rewards), np.stack(dones), infos
 
@@ -60,6 +69,22 @@ class VecEnv:
         results = [remote.recv() for remote in self.remotes]
         obs, infos = zip(*results)
         return np.stack(obs), infos
+
+    def get_state(self):
+        self._assert_not_closed()
+        for remote in self.remotes:
+            remote.send(('get_state', None))
+
+        states = [remote.recv() for remote in self.remotes]
+        return states
+
+    def set_state(self, states):
+        self._assert_not_closed()
+        for remote, state in zip(self.remotes, states):
+            remote.send(('set_state', state))
+
+        results = [remote.recv() for remote in self.remotes]
+        return results
 
     def close_extras(self):
         self.closed = True

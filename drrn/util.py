@@ -37,3 +37,4 @@ def pad_sequences(sequences, maxlen=None, dtype='int32', value=0.):
         # post padding
         x[idx, :len(trunc)] = trunc
     return x
+
